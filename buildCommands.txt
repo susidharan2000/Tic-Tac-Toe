@@ -1,0 +1,16 @@
+docker run --rm \
+  -v $(pwd):/nakama/data/modules \
+  -w /nakama/data/modules \
+  heroiclabs/nakama-pluginbuilder:3.38.0 \
+  build -buildmode=plugin -trimpath -o /nakama/data/modules/module.so ./
+
+docker rm -f nakama
+
+
+docker run --name nakama \
+  --link postgres:postgres \
+  -p 7350:7350 \
+  -p 7351:7351 \
+  -v $(pwd):/nakama/data/modules \
+  heroiclabs/nakama:3.38.0 \
+  --database.address postgres:localdb@postgres:5432/nakama

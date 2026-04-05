@@ -1,0 +1,356 @@
+Tic-Tac-Toe (real-time multiplayer system with server authority)
+
+front-End 
+techStack : React.js (optimized for Mobile)
+  * front-end is UI only (no game logic handles)
+  Front-end  responsibility
+    - Connect to Nakama (WebSocket)
+    - Join match
+    - Send move (row, col)
+    - Listen for events
+    - Render board
+    - Show win/draw
+
+backend
+techStack :Nakama (Go),potgress
+ - server authoritative (all the game logic goes here)
+ - 
+
+
+
+
+
+I built a real-time multiplayer Tic-Tac-Toe system using Nakama.
+
+Each match runs as a single-threaded actor, which ensures all state
+updates happen sequentially without requiring locks.
+
+Players send moves which are validated in the MatchLoop,
+and I enforce correctness through turn validation and idempotency checks.
+
+Win detection is optimized to O(1) using incremental counters.
+
+The server maintains authoritative state and broadcasts structured JSON events,
+so clients remain simple and consistent.
+
+I also handle edge cases like draw conditions and player disconnections.
+
+
+
+1) Game Model
+Rules: * 3 x 3 matrix
+       * 2 players (X,O)
+       * Alternate Turns
+       * status : playing (or) win (or) draw
+State:
+{
+  "board": [["", "", ""],
+            [ "", "", ""],
+            ["", "", ""]],
+  "players": ["p1", "p2"],
+  "currentTurn": "p1",
+  "status": "playing | win | draw"
+  }
+
+
+2) game Flow
+   * Player joins match
+   * If 2 players → start game
+   * Assign turns (p1 starts)
+   * Wait for move
+   * Validate move
+   * Update state
+   * Check win/draw
+   * Switch turn
+   * Broadcast update
+   * Repeat
+
+2)Server-Authoritative Model
+  * Server is the Source of Truth and Ui is just visual
+  * client send actions (moves) -> server validates -> update the gameState in server -> server BroadCast -> client updated the UI
+  * server is responcible for
+     - movement Validation
+     - maintain State
+     - enforce the correctness
+     - Prevent Cheating
+     - BroadCast updates
+
+3) Match (Room)
+   *Life Cycle
+       INIT -> WAITING -> PLAYING -> FINISHED -> CLEANUP
+
+   *Each game room maintains isolated in-memory state to prevent cross-session interference
+
+5) Requirements
+
+    core Implementations
+    * players are add to the queue  (Create room (pair of 2 players create room) )
+      Player clicks “Find Match”
+         -> added to matchmaking queue
+         -> when 2 players available:
+         -> create match (room)
+         -> move both players into match
+    * Match Initialization
+            Match created → INIT state
+            First player joins → WAITING
+            Second player joins → PLAYING 
+    * Game Loop
+        -> WAIT for move
+        -> receive move from client
+        -> validate
+        -> update state
+        -> check win/draw
+        ->switch turn
+        ->broadcast update
+        ->repeat
+
+    * timer based game
+        -> player turn timer
+            * if the tur starts the 30sec timer starts
+            * if playre move cancl timer continue the game
+            * if the timer explires the oponent wains
+        -> If player disconnects: 
+            * notify opponent
+            * end game
+            * opponent wins
+
+
+    * Move Handling 
+        client sends (position) { "cellIndex": 4 }
+        server validated
+            IF game not playing → reject
+            IF not player’s turn → reject
+            IF cell occupied → reject
+            ELSE:
+            update board
+            check win/draw
+            switch turn
+            broadcast state
+    * Idempotency / Duplicate Handling
+       Client sends same move multiple times
+       -> IF cell already filled → reject
+    
+
+
+  Optinal Fetures
+   * Concurrent Game Support - Handled by Nakama
+   * Timer-Based Game Mode - 
+   * Leaderboard System - Database for presistance
+
+
+6)Events
+	•	match_joined
+	•	move_played
+	•	state_updated
+	•	game_finished
+	•	player_disconnected
+
+
+7)movemant valiadiation
+   - Reject if game already finished
+   - Reject if not player's turn
+   - Reject if cell already occupied
+   - Accept only valid moves
+
+
+
+System Guarntees
+- Server-authoritative state management ensures no client-side cheating
+- Move validation ensures correctness under concurrent actions
+- Idempotent handling prevents duplicate state updates
+- Each match maintains isolated in-memory state
+- Real-time updates keep all clients consistent- Server-authoritative state management ensures no client-side cheating
+- Move validation ensures correctness under concurrent actions
+- Idempotent handling prevents duplicate state updates
+- Each match maintains isolated in-memory state
+- Real-time updates keep all clients consistent
+
+
+
+Design Decision:
+
+Approach:
+- Use Nakama's built-in matchmaking system
+- Players join matchmaking pool instead of custom queue
+
+Flow:
+Client → AddMatchmaker
+    → Nakama finds compatible players
+    → Nakama triggers match creation
+    → Players automatically join match
+
+Reasoning:
+- Avoids building a distributed queue system
+- Eliminates concurrency and race condition issues
+- Provides scalable and optimized player matching
+- Reduces system complexity significantly
+
+Trade-offs:
++ Highly scalable and reliable
++ No need to manage queue logic
+- Less control compared to custom matchmaking
+
+Conclusion:
+Using Nakama matchmaking allows focusing on core game logic
+while delegating complex distributed matching to the platform.
+
+
+note:
+Custom matchmaking is essentially a distributed queue problem
+with concurrency, fairness, and scaling concerns.
+
+Since Nakama already provides a battle-tested matchmaking system,
+I chose to use it to avoid reinventing that layer and instead
+focus on server-authoritative game logic and real-time state management.
+
+
+B) STATE MANAGEMENT STRATEGY
+
+Approach:
+	•	Store active game state in-memory
+	•	No database writes per move
+
+Reasoning:
+	•	Low latency
+	•	Real-time responsiveness
+
+Trade-off:
+	•	State lost if server crashes
+
+Justification:
+	•	Acceptable for short-lived casual games
+
+Comparison:
+	•	Tic-Tac-Toe → in-memory OK
+	•	Chess → persistence needed
+	•	Payments → strict durability required
+
+Conclusion:
+Optimized for performance over durability
+
+C) WIN DETECTION STRATEGY (OPTIMIZED O(1))
+
+Approach:
+- Use incremental counters instead of scanning the board after each move.
+
+State:
+- rowTracker[n]
+- colTracker[n]
+- diagonal
+- antiDiagonal
+
+Logic:
+- Player 1 → +1
+- Player 2 → -1
+
+Win Condition:
+- If abs(counter) == n → player wins
+
+Reasoning:
+- Avoids O(n²) board scans after every move
+- Each move updates only affected row, column, and diagonals
+- Enables constant-time win detection
+
+Space Complexity:
+- Board: O(n²)
+- Trackers (row + column + diagonals): O(n)
+- Players: O(1)
+
+Total Space Complexity:
+- O(n²), dominated by board storage
+
+Design Justification:
+- Although win detection can be achieved using only O(n) space,
+  the board is retained for:
+    • move validation (checking occupied cells)
+    • state visibility for clients (UI rendering)
+    • debugging and traceability
+
+Trade-offs:
+- Slightly more complex logic due to signed counters
+- Requires helper function (abs)
+- Uses additional memory for board representation
+
+Conclusion:
+- Achieves O(1) time per move with O(n²) space
+- Optimized for real-time multiplayer performance while maintaining correctness and state clarity
+
+
+--------------------------------------------------
+E) CONCURRENCY MODEL (ACTOR-BASED EXECUTION)
+--------------------------------------------------
+
+- Each match runs as an isolated execution unit (actor model)
+- Every match is executed in a single goroutine
+
+Key Properties:
+- MatchLoop is single-threaded per match
+- All player messages are processed sequentially
+- No shared state across matches
+
+Implications:
+- No need for mutexes or locks inside MatchLoop
+- Eliminates race conditions within a match
+- Ensures deterministic state updates
+
+Concurrency Model:
+- Single-threaded within a match
+- Multi-threaded across matches
+
+Example:
+- Match A → Goroutine 1
+- Match B → Goroutine 2
+- Match C → Goroutine 3
+
+Reasoning:
+- Prevents concurrent writes to shared match state
+- Simplifies game logic
+- Aligns with actor model used in distributed systems
+
+Conclusion:
+The system achieves safe concurrency by isolating state per match
+and processing all events sequentially within that match.
+
+
+
+
+    
+
+
+
+   
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"What happens if user disconnects?"
+"What about race conditions?"
+"What about spam clicks?"
+
+
+
+
+ Lila_Assignment_Susidharan/
+* source_code
+* README.md
+* links.txt
+* demo.mp4
