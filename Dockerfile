@@ -18,4 +18,4 @@ CMD ["/bin/sh", "-ecx", \
   --session.token_expiry_sec 7200 \
   --console.username admin \
   --console.password admin \
-  --socket.outgoing_queue_size 64"]
+  --logger.level DEBUG"]
